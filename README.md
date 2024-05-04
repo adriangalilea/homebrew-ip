@@ -2,11 +2,10 @@
  Simplest cli tool to get your IP on Mac (local, external, gateway)
 
 # install
-`brew install ip`
 
-if it doesn't work, tap it first
+tap it first
 `brew tap adriangalilea/ip`
-then
+then install
 `brew install ip`
 should work
 
