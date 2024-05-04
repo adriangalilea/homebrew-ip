@@ -4,6 +4,12 @@
 # install
 `brew install ip`
 
+if it doesn't work, tap it first
+`brew tap adriangalilea/ip`
+then
+`brew install ip`
+should work
+
 # usage
 local, default option, also `-l`
 ```
