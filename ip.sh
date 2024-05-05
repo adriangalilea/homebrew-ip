@@ -1,5 +1,11 @@
 #!/bin/bash
 
+# TODO change style so that current one is under `-v` "verbose" and running ip simply outputs "192.168.1.X" so it can be used in scripting easily
+# TODO add `test do` in order to try and merge this in brew
+# TODO set up and verify actions to release homebrew automatically
+# TODO add colored output
+# labels: style
+
 # Function to display help
 display_help() {
     echo "Usage: $0 [option...]"
