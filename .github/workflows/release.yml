@@ -1,0 +1,143 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      
+      - name: Get version from source
+        id: version
+        run: |
+          VERSION=$(grep 'var Version' main.go | cut -d'"' -f2)
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Version: $VERSION"
+      
+      - name: Check if version tag exists
+        id: check
+        run: |
+          if git ls-remote --tags origin | grep -q "refs/tags/v${{ steps.version.outputs.version }}"; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "Version v${{ steps.version.outputs.version }} already exists"
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "Version v${{ steps.version.outputs.version }} not found, will create release"
+          fi
+      
+      - name: Build for macOS AMD64
+        if: steps.check.outputs.exists == 'false'
+        run: GOOS=darwin GOARCH=amd64 go build -o ip-darwin-amd64 .
+      
+      - name: Build for macOS ARM64
+        if: steps.check.outputs.exists == 'false'
+        run: GOOS=darwin GOARCH=arm64 go build -o ip-darwin-arm64 .
+      
+      - name: Build for Linux AMD64
+        if: steps.check.outputs.exists == 'false'
+        run: GOOS=linux GOARCH=amd64 go build -o ip-linux-amd64 .
+      
+      - name: Create universal binary for macOS
+        if: steps.check.outputs.exists == 'false'
+        run: lipo -create -output ip-darwin-universal ip-darwin-amd64 ip-darwin-arm64
+      
+      - name: Create tarball
+        if: steps.check.outputs.exists == 'false'
+        run: tar czf ip-v${{ steps.version.outputs.version }}.tar.gz ip-darwin-universal
+      
+      - name: Generate SHA256
+        if: steps.check.outputs.exists == 'false'
+        id: sha
+        run: |
+          echo "sha_universal=$(shasum -a 256 ip-darwin-universal | cut -d' ' -f1)" >> $GITHUB_OUTPUT
+          echo "sha_amd64=$(shasum -a 256 ip-darwin-amd64 | cut -d' ' -f1)" >> $GITHUB_OUTPUT
+          echo "sha_arm64=$(shasum -a 256 ip-darwin-arm64 | cut -d' ' -f1)" >> $GITHUB_OUTPUT
+          echo "sha_linux=$(shasum -a 256 ip-linux-amd64 | cut -d' ' -f1)" >> $GITHUB_OUTPUT
+      
+      - name: Create git tag
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git tag -a "v${{ steps.version.outputs.version }}" -m "Release v${{ steps.version.outputs.version }}"
+          git push origin "v${{ steps.version.outputs.version }}"
+      
+      - name: Generate Changelog
+        if: steps.check.outputs.exists == 'false'
+        id: git-cliff
+        uses: orhun/git-cliff-action@v4
+        with:
+          config: .github/cliff.toml
+          args: --latest
+        env:
+          OUTPUT: CHANGELOG.md
+          GITHUB_REPO: ${{ github.repository }}
+      
+      - name: Create GitHub Release
+        if: steps.check.outputs.exists == 'false'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          body: ${{ steps.git-cliff.outputs.content }}
+          files: |
+            ip-v${{ steps.version.outputs.version }}.tar.gz
+            ip-darwin-amd64
+            ip-darwin-arm64
+            ip-linux-amd64
+      
+      - name: Update Formula
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          cat > Formula/ip.rb << EOF
+          class Ip < Formula
+            desc "Simplest cli tool to get your IP (local, external, gateway)"
+            homepage "https://github.com/adriangalilea/homebrew-ip"
+            version "${{ steps.version.outputs.version }}"
+            
+            if OS.mac?
+              if Hardware::CPU.arm?
+                url "https://github.com/adriangalilea/homebrew-ip/releases/download/v${{ steps.version.outputs.version }}/ip-darwin-arm64"
+                sha256 "${{ steps.sha.outputs.sha_arm64 }}"
+              else
+                url "https://github.com/adriangalilea/homebrew-ip/releases/download/v${{ steps.version.outputs.version }}/ip-darwin-amd64"
+                sha256 "${{ steps.sha.outputs.sha_amd64 }}"
+              end
+            elsif OS.linux?
+              url "https://github.com/adriangalilea/homebrew-ip/releases/download/v${{ steps.version.outputs.version }}/ip-linux-amd64"
+              sha256 "${{ steps.sha.outputs.sha_linux }}"
+            end
+          
+            def install
+              bin.install "ip-darwin-#{Hardware::CPU.arm? ? "arm64" : "amd64"}" => "ip" if OS.mac?
+              bin.install "ip-linux-amd64" => "ip" if OS.linux?
+            end
+          
+            test do
+              output = shell_output("#{bin}/ip")
+              assert_match(/\d+\.\d+\.\d+\.\d+/, output)
+            end
+          end
+          EOF
+      
+      - name: Commit formula update
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git add Formula/ip.rb
+          git commit -m "chore: update formula to v${{ steps.version.outputs.version }}" || true
+          git push origin main || true

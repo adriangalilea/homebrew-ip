@@ -1,14 +1,18 @@
 class Ip < Formula
   desc "Simplest cli tool to get your IP (local, external, gateway)"
   homepage "https://github.com/adriangalilea/homebrew-ip"
-  url "https://github.com/adriangalilea/homebrew-ip/archive/refs/tags/v1.0.1.tar.gz" 
-  sha256 "e2fd2d182c88a4fa8faeb8628c517cedeb606692c128c26c021e2fd95e48d205" 
+  url "https://github.com/adriangalilea/homebrew-ip/archive/refs/heads/main.tar.gz"
+  version "2.0.0"
+  head "https://github.com/adriangalilea/homebrew-ip.git", branch: "main"
+
+  depends_on "go" => :build
 
   def install
-    bin.install "ip.sh" => "ip"
+    system "go", "build", "-o", bin/"ip", "."
   end
 
   test do
-    system "#{bin}/ip", "-h"
+    output = shell_output("#{bin}/ip")
+    assert_match(/\d+\.\d+\.\d+\.\d+/, output)
   end
 end
