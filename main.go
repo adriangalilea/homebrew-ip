@@ -23,7 +23,7 @@ var (
 			Foreground(lipgloss.AdaptiveColor{Light: "196", Dark: "204"}) // Red/Pink
 )
 
-var Version = "2.0.0"
+var Version = "2.0.1"
 
 type CLI struct {
 	Local      bool `short:"l" help:"Show local non-loopback IPv4 addresses"`
