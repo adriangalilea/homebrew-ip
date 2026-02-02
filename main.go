@@ -6,12 +6,13 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/exec"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/alecthomas/kong"
 	"github.com/charmbracelet/lipgloss"
+	"golang.org/x/net/route"
 )
 
 var (
@@ -27,7 +28,7 @@ var (
 			Foreground(lipgloss.AdaptiveColor{Light: "196", Dark: "204"})
 )
 
-var Version = "2.1.1"
+var Version = "2.1.2"
 
 type CLI struct {
 	Local      bool             `short:"l" help:"Show local non-loopback IPv4 addresses"`
@@ -83,22 +84,33 @@ func getLocalIPs(includeBridge bool) ([]IPEntry, error) {
 }
 
 func getGatewayIP() (string, error) {
-	output, err := exec.Command("netstat", "-rn").Output()
+	rib, err := route.FetchRIB(syscall.AF_INET, syscall.NET_RT_DUMP, 0)
 	if err != nil {
-		return "", fmt.Errorf("netstat failed: %w", err)
+		return "", fmt.Errorf("fetching routing table: %w", err)
 	}
 
-	for _, line := range strings.Split(string(output), "\n") {
-		if !strings.Contains(line, "default") || strings.Contains(line, "::") {
+	msgs, err := route.ParseRIB(syscall.NET_RT_DUMP, rib)
+	if err != nil {
+		return "", fmt.Errorf("parsing routing table: %w", err)
+	}
+
+	for _, msg := range msgs {
+		rm, ok := msg.(*route.RouteMessage)
+		if !ok || len(rm.Addrs) <= syscall.RTAX_GATEWAY {
 			continue
 		}
-		fields := strings.Fields(line)
-		if len(fields) < 2 {
+
+		dst, ok := rm.Addrs[syscall.RTAX_DST].(*route.Inet4Addr)
+		if !ok || dst.IP != [4]byte{0, 0, 0, 0} {
 			continue
 		}
-		if net.ParseIP(fields[1]) != nil {
-			return fields[1], nil
+
+		gw, ok := rm.Addrs[syscall.RTAX_GATEWAY].(*route.Inet4Addr)
+		if !ok {
+			continue
 		}
+
+		return net.IPv4(gw.IP[0], gw.IP[1], gw.IP[2], gw.IP[3]).String(), nil
 	}
 
 	return "", fmt.Errorf("no default gateway found")
