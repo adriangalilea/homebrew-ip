@@ -1,19 +1,19 @@
 class Ip < Formula
   desc "Simplest cli tool to get your IP (local, external, gateway)"
   homepage "https://github.com/adriangalilea/homebrew-ip"
-  version "2.0.1"
+  version "2.1.0"
   
   if OS.mac?
     if Hardware::CPU.arm?
-      url "https://github.com/adriangalilea/homebrew-ip/releases/download/v2.0.1/ip-darwin-arm64"
-      sha256 "23e9537ec52b6c1cb1809ab2bbbbee76387ec738443bcbcda13b95f93d51ebe6"
+      url "https://github.com/adriangalilea/homebrew-ip/releases/download/v2.1.0/ip-darwin-arm64"
+      sha256 "dede5f9e02499c24be1add7fe508968e6fe0f3f3c57a81cf08d799130e7b75dc"
     else
-      url "https://github.com/adriangalilea/homebrew-ip/releases/download/v2.0.1/ip-darwin-amd64"
-      sha256 "f96731cf85b16f632f2182f1a060eee26e1e464c4d4914ce91d330d22ee80774"
+      url "https://github.com/adriangalilea/homebrew-ip/releases/download/v2.1.0/ip-darwin-amd64"
+      sha256 "2bae10c5e07ba9eebd5dc3cc1e68b71c164664ba452cada4c8b2f758f2ad1745"
     end
   elsif OS.linux?
-    url "https://github.com/adriangalilea/homebrew-ip/releases/download/v2.0.1/ip-linux-amd64"
-    sha256 "0659743720c2992b0443905713028be75496d69e21bdb71e4e96aa44b5378468"
+    url "https://github.com/adriangalilea/homebrew-ip/releases/download/v2.1.0/ip-linux-amd64"
+    sha256 "2a49d5b5185d212fbfe02a0809ea732b580be9ca6d41623166053e8d0a22f90a"
   end
 
   def install
