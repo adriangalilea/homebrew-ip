@@ -2,9 +2,13 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"net"
+	"net/http"
+	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/alecthomas/kong"
 	"github.com/charmbracelet/lipgloss"
@@ -23,7 +27,7 @@ var (
 			Foreground(lipgloss.AdaptiveColor{Light: "196", Dark: "204"}) // Red/Pink
 )
 
-var Version = "2.0.1"
+var Version = "2.1.0"
 
 type CLI struct {
 	Local      bool `short:"l" help:"Show local non-loopback IPv4 addresses"`
@@ -96,21 +100,29 @@ func getGatewayIP() string {
 	return ""
 }
 
-func getExternalIP() string {
-	cmd := exec.Command("dig", "+short", "myip.opendns.com", "@resolver1.opendns.com")
-	output, err := cmd.Output()
+func getExternalIP() (string, error) {
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get("https://api.ipify.org")
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("unexpected status: %d", resp.StatusCode)
 	}
 
-	ip := strings.TrimSpace(string(output))
-
-	// Assert it looks like an IP (dig should return a single IP address)
-	if parts := strings.Split(ip, "."); len(parts) != 4 {
-		return ""
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("reading response: %w", err)
 	}
 
-	return ip
+	ip := strings.TrimSpace(string(body))
+	if net.ParseIP(ip) == nil {
+		return "", fmt.Errorf("invalid IP returned: %q", ip)
+	}
+
+	return ip, nil
 }
 
 func main() {
@@ -170,7 +182,15 @@ func main() {
 	}
 
 	if cli.External || showAll {
-		if ip := getExternalIP(); ip != "" {
+		ip, err := getExternalIP()
+		if err != nil {
+			if prettyOutput && needSpacer {
+				fmt.Println()
+			}
+			fmt.Fprintf(os.Stderr, "%s %s\n",
+				errorStyle.Render("External IP:"),
+				errorStyle.Render(err.Error()))
+		} else {
 			if prettyOutput && needSpacer {
 				fmt.Println()
 			}
