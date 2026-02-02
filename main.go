@@ -15,89 +15,93 @@ import (
 )
 
 var (
-	labelStyle = lipgloss.NewStyle() // Default (white/black)
+	labelStyle = lipgloss.NewStyle()
 
 	ipStyle = lipgloss.NewStyle().
-		Foreground(lipgloss.AdaptiveColor{Light: "214", Dark: "220"}) // Gold/Yellow
+		Foreground(lipgloss.AdaptiveColor{Light: "214", Dark: "220"})
 
 	interfaceStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.AdaptiveColor{Light: "241", Dark: "245"}) // Gray
+			Foreground(lipgloss.AdaptiveColor{Light: "241", Dark: "245"})
 
 	errorStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.AdaptiveColor{Light: "196", Dark: "204"}) // Red/Pink
+			Foreground(lipgloss.AdaptiveColor{Light: "196", Dark: "204"})
 )
 
-var Version = "2.1.0"
+var Version = "2.1.1"
 
 type CLI struct {
-	Local      bool `short:"l" help:"Show local non-loopback IPv4 addresses"`
-	Gateway    bool `short:"g" help:"Show gateway IP"`
-	External   bool `short:"e" help:"Show external IP address"`
-	All        bool `short:"a" help:"When combined with other flags, shows all interfaces"`
-	NoHeaders  bool `short:"n" help:"Don't show headers (for scripting)"`
-	ShowBridge bool `short:"b" help:"Include bridge interfaces in local IPs"`
+	Local      bool             `short:"l" help:"Show local non-loopback IPv4 addresses"`
+	Gateway    bool             `short:"g" help:"Show gateway IP"`
+	External   bool             `short:"e" help:"Show external IP address"`
+	All        bool             `short:"a" help:"When combined with other flags, shows all interfaces"`
+	NoHeaders  bool             `short:"n" help:"Don't show headers (for scripting)"`
+	ShowBridge bool             `short:"b" help:"Include bridge interfaces in local IPs"`
 	Version    kong.VersionFlag `short:"v" help:"Show version"`
 }
 
-func getLocalIPs(includeBridge bool) []string {
+type IPEntry struct {
+	Addr      string
+	Interface string
+}
+
+type Section struct {
+	Label   string
+	Entries []IPEntry
+	Err     error
+}
+
+func getLocalIPs(includeBridge bool) ([]IPEntry, error) {
 	interfaces, err := net.Interfaces()
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("listing interfaces: %w", err)
 	}
 
-	var ips []string
+	var entries []IPEntry
 	for _, iface := range interfaces {
 		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
 			continue
 		}
-
 		if !includeBridge && strings.HasPrefix(iface.Name, "bridge") {
 			continue
 		}
 
 		addrs, err := iface.Addrs()
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("reading addrs for %s: %w", iface.Name, err)
 		}
 
 		for _, addr := range addrs {
-			if ipnet, ok := addr.(*net.IPNet); ok && ipnet.IP.To4() != nil {
-				ips = append(ips, fmt.Sprintf("%s - %s", ipnet.IP.String(), iface.Name))
+			ipnet, ok := addr.(*net.IPNet)
+			if !ok || ipnet.IP.To4() == nil {
+				continue
 			}
+			entries = append(entries, IPEntry{Addr: ipnet.IP.String(), Interface: iface.Name})
 		}
 	}
 
-	return ips
+	return entries, nil
 }
 
-func getGatewayIP() string {
-	cmd := exec.Command("netstat", "-rn")
-	output, err := cmd.Output()
+func getGatewayIP() (string, error) {
+	output, err := exec.Command("netstat", "-rn").Output()
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("netstat failed: %w", err)
 	}
 
-	lines := strings.Split(string(output), "\n")
-	for _, line := range lines {
-		if strings.Contains(line, "default") && !strings.Contains(line, "::") {
-			fields := strings.Fields(line)
-			// netstat -rn format: destination gateway flags refs use interface
-			// We expect at least: "default" "192.168.1.1" ...
-			if len(fields) < 2 {
-				continue
-			}
-
-			gateway := fields[1]
-			// Assert it looks like an IP
-			if parts := strings.Split(gateway, "."); len(parts) != 4 {
-				continue
-			}
-
-			return gateway
+	for _, line := range strings.Split(string(output), "\n") {
+		if !strings.Contains(line, "default") || strings.Contains(line, "::") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		if net.ParseIP(fields[1]) != nil {
+			return fields[1], nil
 		}
 	}
 
-	return ""
+	return "", fmt.Errorf("no default gateway found")
 }
 
 func getExternalIP() (string, error) {
@@ -125,6 +129,43 @@ func getExternalIP() (string, error) {
 	return ip, nil
 }
 
+func renderSections(sections []Section, pretty bool) {
+	first := true
+	for _, s := range sections {
+		if s.Err != nil {
+			if pretty && !first {
+				fmt.Println()
+			}
+			fmt.Fprintf(os.Stderr, "%s %s\n",
+				errorStyle.Render(s.Label+":"),
+				errorStyle.Render(s.Err.Error()))
+			first = false
+			continue
+		}
+		if len(s.Entries) == 0 {
+			continue
+		}
+		if pretty && !first {
+			fmt.Println()
+		}
+		if pretty {
+			fmt.Println(labelStyle.Render(s.Label + ":"))
+			for _, e := range s.Entries {
+				if e.Interface != "" {
+					fmt.Printf("  %s %s\n", ipStyle.Render(e.Addr), interfaceStyle.Render("("+e.Interface+")"))
+				} else {
+					fmt.Printf("  %s\n", ipStyle.Render(e.Addr))
+				}
+			}
+		} else {
+			for _, e := range s.Entries {
+				fmt.Println(e.Addr)
+			}
+		}
+		first = false
+	}
+}
+
 func main() {
 	var cli CLI
 	kong.Parse(&cli,
@@ -134,72 +175,34 @@ func main() {
 		kong.Vars{"version": Version},
 	)
 
-	// No flags = show all
 	showAll := !cli.Local && !cli.Gateway && !cli.External
-
-	// Pretty output only for default view, plain output for specific flags (piping)
-	prettyOutput := showAll && !cli.NoHeaders
-
-	// Bridge interfaces: show in default view, with -b, or with -la
+	pretty := showAll && !cli.NoHeaders
 	includeBridge := showAll || cli.ShowBridge || (cli.Local && cli.All)
 
-	// Print what was requested
-	needSpacer := false
+	var sections []Section
 
 	if cli.Local || showAll {
-		if ips := getLocalIPs(includeBridge); len(ips) > 0 {
-			if prettyOutput {
-				fmt.Println(labelStyle.Render("Local IPs:"))
-				for _, ip := range ips {
-					parts := strings.Split(ip, " - ")
-					fmt.Printf("  %s %s\n",
-						ipStyle.Render(parts[0]),
-						interfaceStyle.Render("("+parts[1]+")"))
-				}
-			} else {
-				for _, ip := range ips {
-					parts := strings.Split(ip, " - ")
-					fmt.Println(parts[0])
-				}
-			}
-			needSpacer = true
-		}
+		entries, err := getLocalIPs(includeBridge)
+		sections = append(sections, Section{Label: "Local IPs", Entries: entries, Err: err})
 	}
 
 	if cli.Gateway || showAll {
-		if ip := getGatewayIP(); ip != "" {
-			if prettyOutput && needSpacer {
-				fmt.Println()
-			}
-			if prettyOutput {
-				fmt.Println(labelStyle.Render("Gateway IP:"))
-				fmt.Printf("  %s\n", ipStyle.Render(ip))
-			} else {
-				fmt.Println(ip)
-			}
-			needSpacer = true
+		ip, err := getGatewayIP()
+		var entries []IPEntry
+		if err == nil {
+			entries = []IPEntry{{Addr: ip}}
 		}
+		sections = append(sections, Section{Label: "Gateway IP", Entries: entries, Err: err})
 	}
 
 	if cli.External || showAll {
 		ip, err := getExternalIP()
-		if err != nil {
-			if prettyOutput && needSpacer {
-				fmt.Println()
-			}
-			fmt.Fprintf(os.Stderr, "%s %s\n",
-				errorStyle.Render("External IP:"),
-				errorStyle.Render(err.Error()))
-		} else {
-			if prettyOutput && needSpacer {
-				fmt.Println()
-			}
-			if prettyOutput {
-				fmt.Println(labelStyle.Render("External IP:"))
-				fmt.Printf("  %s\n", ipStyle.Render(ip))
-			} else {
-				fmt.Println(ip)
-			}
+		var entries []IPEntry
+		if err == nil {
+			entries = []IPEntry{{Addr: ip}}
 		}
+		sections = append(sections, Section{Label: "External IP", Entries: entries, Err: err})
 	}
+
+	renderSections(sections, pretty)
 }
