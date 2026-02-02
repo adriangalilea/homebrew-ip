@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -28,7 +29,7 @@ var (
 			Foreground(lipgloss.AdaptiveColor{Light: "196", Dark: "204"})
 )
 
-var Version = "2.1.2"
+var Version = "2.2.0"
 
 type CLI struct {
 	Local      bool             `short:"l" help:"Show local non-loopback IPv4 addresses"`
@@ -37,18 +38,28 @@ type CLI struct {
 	All        bool             `short:"a" help:"When combined with other flags, shows all interfaces"`
 	NoHeaders  bool             `short:"n" help:"Don't show headers (for scripting)"`
 	ShowBridge bool             `short:"b" help:"Include bridge interfaces in local IPs"`
+	JSON       bool             `short:"j" help:"Output as JSON"`
 	Version    kong.VersionFlag `short:"v" help:"Show version"`
 }
 
 type IPEntry struct {
-	Addr      string
-	Interface string
+	Addr      string `json:"addr"`
+	Interface string `json:"interface,omitempty"`
 }
 
 type Section struct {
 	Label   string
 	Entries []IPEntry
 	Err     error
+}
+
+type JSONOutput struct {
+	Local         []IPEntry `json:"local,omitempty"`
+	LocalError    string    `json:"local_error,omitempty"`
+	Gateway       string    `json:"gateway,omitempty"`
+	GatewayError  string    `json:"gateway_error,omitempty"`
+	External      string    `json:"external,omitempty"`
+	ExternalError string    `json:"external_error,omitempty"`
 }
 
 func getLocalIPs(includeBridge bool) ([]IPEntry, error) {
@@ -141,6 +152,35 @@ func getExternalIP() (string, error) {
 	return ip, nil
 }
 
+func renderJSON(sections []Section) {
+	var out JSONOutput
+	for _, s := range sections {
+		switch s.Label {
+		case "Local IPs":
+			if s.Err != nil {
+				out.LocalError = s.Err.Error()
+			} else {
+				out.Local = s.Entries
+			}
+		case "Gateway IP":
+			if s.Err != nil {
+				out.GatewayError = s.Err.Error()
+			} else if len(s.Entries) > 0 {
+				out.Gateway = s.Entries[0].Addr
+			}
+		case "External IP":
+			if s.Err != nil {
+				out.ExternalError = s.Err.Error()
+			} else if len(s.Entries) > 0 {
+				out.External = s.Entries[0].Addr
+			}
+		}
+	}
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	enc.Encode(out)
+}
+
 func renderSections(sections []Section, pretty bool) {
 	first := true
 	for _, s := range sections {
@@ -216,5 +256,9 @@ func main() {
 		sections = append(sections, Section{Label: "External IP", Entries: entries, Err: err})
 	}
 
-	renderSections(sections, pretty)
+	if cli.JSON {
+		renderJSON(sections)
+	} else {
+		renderSections(sections, pretty)
+	}
 }

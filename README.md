@@ -53,10 +53,31 @@ $ ip -la   # Local with all interfaces (including bridges)
 192.168.64.1
 ```
 
+### JSON output
+```bash
+$ ip -j
+{
+  "local": [
+    { "addr": "192.168.1.95", "interface": "en0" },
+    { "addr": "192.168.64.1", "interface": "bridge100" }
+  ],
+  "gateway": "192.168.1.1",
+  "external": "88.6.43.97"
+}
+
+$ ip -jl  # Just local as JSON
+{
+  "local": [
+    { "addr": "192.168.1.95", "interface": "en0" }
+  ]
+}
+```
+
 ### Options
 - `-l` - Show local IP
-- `-g` - Show gateway IP  
+- `-g` - Show gateway IP
 - `-e` - Show external IP
+- `-j` - Output as JSON
 - `-a` - When combined with other flags, shows all interfaces
 - `-b` - Include bridge interfaces
 - `-n` - No headers (force plain output)
@@ -72,5 +93,8 @@ ssh user@$(ip -l)
 
 # Check if VPN is connected (external IP changes)
 [ "$(ip -e)" != "YOUR_NORMAL_IP" ] && echo "VPN is active"
+
+# Get local IP for a specific interface
+ip -j | jq '.local[] | select(.interface == "en0") | .addr'
 ```
 
