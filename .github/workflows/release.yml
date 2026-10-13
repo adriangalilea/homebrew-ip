@@ -35,7 +35,7 @@ jobs:
   release:
     needs: verify
     if: startsWith(github.ref, 'refs/tags/')
-    uses: adriangalilea/ci/.github/workflows/release.yml@c2ba9058dbad2cc8589da7419f2bd8b30ad9334a # v1.2.0
+    uses: adriangalilea/ci/.github/workflows/release.yml@aff0340f6067ae0013ad2304c3c1bb591d64ceb6 # v1.2.1
     with:
       tag: ${{ github.ref_name }}
     permissions:
@@ -43,7 +43,7 @@ jobs:
 
   tap:
     needs: release
-    uses: adriangalilea/ci/.github/workflows/tap.yml@c2ba9058dbad2cc8589da7419f2bd8b30ad9334a # v1.2.0
+    uses: adriangalilea/ci/.github/workflows/tap.yml@aff0340f6067ae0013ad2304c3c1bb591d64ceb6 # v1.2.1
     with:
       formula: ip
       version: ${{ github.ref_name }}
