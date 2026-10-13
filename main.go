@@ -62,8 +62,28 @@ type IPEntry struct {
 	Interface string `json:"interface,omitempty"`
 }
 
+type Kind int
+
+const (
+	Local Kind = iota
+	Gateway
+	External
+)
+
+func (k Kind) Label() string {
+	switch k {
+	case Local:
+		return "Local IPs"
+	case Gateway:
+		return "Gateway IP"
+	case External:
+		return "External IP"
+	}
+	panic(fmt.Sprintf("unknown kind %d", k))
+}
+
 type Section struct {
-	Label   string
+	Kind    Kind
 	Entries []IPEntry
 	Err     error
 }
@@ -167,33 +187,33 @@ func getExternalIP() (string, error) {
 	return ip, nil
 }
 
-func renderJSON(sections []Section) {
+func renderJSON(sections []Section) error {
 	var out JSONOutput
 	for _, s := range sections {
-		switch s.Label {
-		case "Local IPs":
+		switch s.Kind {
+		case Local:
 			if s.Err != nil {
 				out.LocalError = s.Err.Error()
 			} else {
 				out.Local = s.Entries
 			}
-		case "Gateway IP":
+		case Gateway:
 			if s.Err != nil {
 				out.GatewayError = s.Err.Error()
-			} else if len(s.Entries) > 0 {
+			} else {
 				out.Gateway = s.Entries[0].Addr
 			}
-		case "External IP":
+		case External:
 			if s.Err != nil {
 				out.ExternalError = s.Err.Error()
-			} else if len(s.Entries) > 0 {
+			} else {
 				out.External = s.Entries[0].Addr
 			}
 		}
 	}
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
-	enc.Encode(out)
+	return enc.Encode(out)
 }
 
 func renderSections(sections []Section, pretty bool) {
@@ -204,7 +224,7 @@ func renderSections(sections []Section, pretty bool) {
 				fmt.Println()
 			}
 			fmt.Fprintf(os.Stderr, "%s %s\n",
-				errorStyle.Render(s.Label+":"),
+				errorStyle.Render(s.Kind.Label()+":"),
 				errorStyle.Render(s.Err.Error()))
 			first = false
 			continue
@@ -216,7 +236,7 @@ func renderSections(sections []Section, pretty bool) {
 			fmt.Println()
 		}
 		if pretty {
-			fmt.Println(labelStyle.Render(s.Label + ":"))
+			fmt.Println(labelStyle.Render(s.Kind.Label() + ":"))
 			for _, e := range s.Entries {
 				if e.Interface != "" {
 					fmt.Printf("  %s %s\n", ipStyle.Render(e.Addr), interfaceStyle.Render("("+e.Interface+")"))
@@ -250,30 +270,39 @@ func main() {
 
 	if cli.Local || showAll {
 		entries, err := getLocalIPs(includeBridge)
-		sections = append(sections, Section{Label: "Local IPs", Entries: entries, Err: err})
+		sections = append(sections, Section{Kind: Local, Entries: entries, Err: err})
 	}
 
 	if cli.Gateway || showAll {
-		ip, err := getGatewayIP()
-		var entries []IPEntry
-		if err == nil {
-			entries = []IPEntry{{Addr: ip}}
-		}
-		sections = append(sections, Section{Label: "Gateway IP", Entries: entries, Err: err})
+		sections = append(sections, single(Gateway, getGatewayIP))
 	}
 
 	if cli.External || showAll {
-		ip, err := getExternalIP()
-		var entries []IPEntry
-		if err == nil {
-			entries = []IPEntry{{Addr: ip}}
-		}
-		sections = append(sections, Section{Label: "External IP", Entries: entries, Err: err})
+		sections = append(sections, single(External, getExternalIP))
 	}
 
 	if cli.JSON {
-		renderJSON(sections)
+		if err := renderJSON(sections); err != nil {
+			fmt.Fprintln(os.Stderr, errorStyle.Render("writing JSON: "+err.Error()))
+			os.Exit(1)
+		}
 	} else {
 		renderSections(sections, pretty)
 	}
+
+	// A lookup that failed is a failed run, so `[ "$(ip -e)" != ... ]` in a
+	// script can tell "no answer" from "a different answer".
+	for _, s := range sections {
+		if s.Err != nil {
+			os.Exit(1)
+		}
+	}
+}
+
+func single(kind Kind, lookup func() (string, error)) Section {
+	ip, err := lookup()
+	if err != nil {
+		return Section{Kind: kind, Err: err}
+	}
+	return Section{Kind: kind, Entries: []IPEntry{{Addr: ip}}}
 }
