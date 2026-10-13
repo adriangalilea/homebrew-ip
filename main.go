@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"runtime/debug"
 	"strings"
 	"syscall"
 	"time"
@@ -29,7 +30,21 @@ var (
 			Foreground(lipgloss.AdaptiveColor{Light: "196", Dark: "204"})
 )
 
-var Version = "2.2.0"
+// The git tag is the version. The Homebrew formula builds from the tag's
+// source tarball, which carries no VCS data, so it passes the version with
+// -ldflags "-X main.version=..."; `go install ...@vX` records it in the build
+// info instead. A build that has neither is a development build.
+var version = ""
+
+func resolvedVersion() string {
+	if version != "" {
+		return version
+	}
+	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" && info.Main.Version != "(devel)" {
+		return strings.TrimPrefix(info.Main.Version, "v")
+	}
+	return "dev"
+}
 
 type CLI struct {
 	Local      bool             `short:"l" help:"Show local non-loopback IPv4 addresses"`
@@ -224,7 +239,7 @@ func main() {
 		kong.Name("ip"),
 		kong.Description("Simple tool to get your IP addresses"),
 		kong.UsageOnError(),
-		kong.Vars{"version": Version},
+		kong.Vars{"version": resolvedVersion()},
 	)
 
 	showAll := !cli.Local && !cli.Gateway && !cli.External

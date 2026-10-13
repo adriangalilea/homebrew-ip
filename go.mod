@@ -1,4 +1,4 @@
-module github.com/adriangalilea/homebrew-ip
+module github.com/adriangalilea/ip
 
 go 1.24.5
 

@@ -1,12 +1,12 @@
-# Build the macOS binaries with read-only rights, release them through
-# adriangalilea/ci, then point Formula/ip.rb at the new assets. `var Version`
-# in main.go is the version; a version with no GitHub release yet is what
-# triggers a release, so a run that dies halfway is finished by the next push.
+# The tag is the version (Go modules need the `v`). Every push and PR is
+# verified; a tag also publishes the GitHub release and points the formula in
+# adriangalilea/homebrew-tap at it, through adriangalilea/ci.
 name: release
 
 on:
   push:
     branches: [main]
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
   pull_request:
     branches: [main]
 
@@ -17,125 +17,35 @@ concurrency:
 permissions: {}
 
 jobs:
-  build:
+  verify:
     runs-on: macos-latest
     permissions:
       contents: read
-    outputs:
-      version: ${{ steps.version.outputs.version }}
-      release: ${{ steps.release.outputs.release }}
-      sha_arm64: ${{ steps.sha.outputs.sha_arm64 }}
-      sha_amd64: ${{ steps.sha.outputs.sha_amd64 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-
-      - name: Version
-        id: version
-        run: |
-          VERSION=$(sed -n 's/^var Version = "\(.*\)"$/\1/p' main.go)
-          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::no semver 'var Version' in main.go"; exit 1; }
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-
-      - name: Release needed
-        id: release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: v${{ steps.version.outputs.version }}
-          ON_DEFAULT: ${{ github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
-        run: |
-          if [ "$ON_DEFAULT" != true ]; then echo "release=false" >> "$GITHUB_OUTPUT"; exit 0; fi
-          if gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --silent 2> err; then
-            echo "release=false" >> "$GITHUB_OUTPUT"
-          elif grep -q 'HTTP 404' err; then
-            echo "release=true" >> "$GITHUB_OUTPUT"
-          else
-            cat err; exit 1
-          fi
-
-      - name: Build
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          mkdir dist
-          GOOS=darwin GOARCH=amd64 go build -o dist/ip-darwin-amd64 .
-          GOOS=darwin GOARCH=arm64 go build -o dist/ip-darwin-arm64 .
-          lipo -create -output ip-darwin-universal dist/ip-darwin-amd64 dist/ip-darwin-arm64
-          tar czf "dist/ip-v$VERSION.tar.gz" ip-darwin-universal
-
-      - name: Checksums
-        id: sha
-        run: |
-          echo "sha_arm64=$(shasum -a 256 dist/ip-darwin-arm64 | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
-          echo "sha_amd64=$(shasum -a 256 dist/ip-darwin-amd64 | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
-
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: dist
-          path: dist/
-          if-no-files-found: error
+      - run: test -z "$(gofmt -l .)"
+      - run: go vet ./...
+      - run: go build ./...
 
   release:
-    needs: build
-    if: needs.build.outputs.release == 'true'
-    uses: adriangalilea/ci/.github/workflows/release.yml@69c560ad05a9a3f62cdb9a33cf4307cc6b485c1d # v1.1.0
+    needs: verify
+    if: startsWith(github.ref, 'refs/tags/')
+    uses: adriangalilea/ci/.github/workflows/release.yml@c2ba9058dbad2cc8589da7419f2bd8b30ad9334a # v1.2.0
     with:
-      tag: v${{ needs.build.outputs.version }}
-      artifact: dist
+      tag: ${{ github.ref_name }}
     permissions:
       contents: write
 
-  formula:
-    needs: [build, release]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Write Formula/ip.rb
-        env:
-          VERSION: ${{ needs.build.outputs.version }}
-          SHA_ARM64: ${{ needs.build.outputs.sha_arm64 }}
-          SHA_AMD64: ${{ needs.build.outputs.sha_amd64 }}
-        run: |
-          BASE="https://github.com/$GITHUB_REPOSITORY/releases/download/v$VERSION"
-          cat > Formula/ip.rb <<EOF
-          class Ip < Formula
-            desc "Simplest cli tool to get your IP (local, external, gateway)"
-            homepage "https://github.com/$GITHUB_REPOSITORY"
-            version "$VERSION"
-
-            if Hardware::CPU.arm?
-              url "$BASE/ip-darwin-arm64"
-              sha256 "$SHA_ARM64"
-            else
-              url "$BASE/ip-darwin-amd64"
-              sha256 "$SHA_AMD64"
-            end
-
-            def install
-              bin.install "ip-darwin-#{Hardware::CPU.arm? ? "arm64" : "amd64"}" => "ip"
-            end
-
-            test do
-              output = shell_output("#{bin}/ip")
-              assert_match(/\d+\.\d+\.\d+\.\d+/, output)
-            end
-          end
-          EOF
-
-      - name: Commit
-        env:
-          VERSION: ${{ needs.build.outputs.version }}
-        run: |
-          git config user.name github-actions
-          git config user.email github-actions@github.com
-          git add Formula/ip.rb
-          git commit -m "chore: update formula to v$VERSION"
-          git push origin HEAD:main
+  tap:
+    needs: release
+    uses: adriangalilea/ci/.github/workflows/tap.yml@c2ba9058dbad2cc8589da7419f2bd8b30ad9334a # v1.2.0
+    with:
+      formula: ip
+      version: ${{ github.ref_name }}
+    secrets:
+      tap-token: ${{ secrets.TAP_TOKEN }}
